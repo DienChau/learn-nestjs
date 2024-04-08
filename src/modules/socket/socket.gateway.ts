@@ -3,74 +3,71 @@ import {
   MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Socket, Server } from 'socket.io';
+import { AuthService } from '../auth/auth.service';
+import { OnModuleInit } from '@nestjs/common';
 
 @WebSocketGateway({
   cors: {
     origin: '*',
   },
 })
-export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class ChatGateway
+  implements
+    OnGatewayInit,
+    OnGatewayConnection,
+    OnGatewayDisconnect,
+    OnModuleInit
+{
   @WebSocketServer()
   server: Server;
 
+  constructor(private readonly authService: AuthService) {}
+
   users: { [key: string]: string } = {};
 
-  handleConnection(@MessageBody() message: any, client: Socket) {
-    // Handle client connection
-    // console.log('Client connected: ' + client.id,message);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  afterInit(socket: Socket): any {}
+
+  async handleConnection(socket: Socket) {
+    const authHeader = socket.handshake.headers.authorization;
+    const token = authHeader.split(' ')[1];
+    console.log(111, token);
+    if (authHeader) {
+      try {
+        const userId = await this.authService.handleVerifyToken(token);
+        console.log(333, userId);
+        socket.data.userId = userId;
+      } catch (error) {
+        socket.disconnect();
+      }
+    } else {
+      socket.disconnect();
+    }
   }
 
-  handleDisconnect(client: Socket) {
-    console.log('Client disconnected: ' + client.id);
-    delete this.users[client.id];
-    this.server.emit('users', Object.values(this.users));
+  handleDisconnect(socket: Socket) {
+    console.log('disconnect', socket.data?.userId);
   }
 
-  @SubscribeMessage('chat')
-  handleMessage(
-    @MessageBody() message: any,
-    @ConnectedSocket() client: Socket,
-  ) {
-    console.log(message);
-
-    this.server.to(message.chat._id).emit('chat', message);
+  onModuleInit() {
+    this.server.on('connection', (socket) => {
+      console.log('id:', socket.id);
+      console.log('connected test');
+    });
   }
 
-  @SubscribeMessage('isTyping')
-  isTyping(@MessageBody() userData: any) {
-    this.server.to(userData.roomId).emit('isTyping', userData);
-  }
-
-  @SubscribeMessage('callUser')
-  handleCallUser(
-    @MessageBody() callData: any,
-    @ConnectedSocket() client: Socket,
-  ) {
-    console.log(callData, '=============');
-    client.broadcast.to(callData.roomId).emit('reciveCall', callData);
-  }
-
-  @SubscribeMessage('answerCall')
-  handleAnswerCall(
-    @MessageBody()
-    callData: {
-      signal: { type: string; sdp: string };
-      to: {
-        name: string;
-        id: string;
-        roomId: string;
-      };
-    },
-    @ConnectedSocket() client: Socket,
-  ) {
-    console.log(callData, '=============callAccepted');
-    client.broadcast
-      .to(callData.to.roomId)
-      .emit('callAccepted', callData.signal);
+  @SubscribeMessage('addMessage')
+  onNewMessage(@MessageBody() body: any) {
+    console.log(body);
+    this.server.emit('onMessage', {
+      msg: 'New Message',
+      content: body,
+    });
   }
 }
